@@ -221,7 +221,8 @@ public:
 
 
   int axis_;
-  int nbOutputChannels_, nbInputChannels_;
+  int nbOutputChannels_, dimsAfterAxis_;
+  int dimsBeforeAxis_;
   Weights kernelWeights_, biasWeights_;
 
   DataType dataType_{DataType::kFLOAT};

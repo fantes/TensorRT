@@ -2,6 +2,7 @@
 #include "plugin.h"
 #include "innerProductWithAxisPlugin.h"
 #include "fp16.h"
+#include <cudnn.h>
 
 using namespace nvinfer1;
 using nvinfer1::plugin::InnerProductWithAxisPlugin;
@@ -35,17 +36,17 @@ InnerProductWithAxisPlugin::InnerProductWithAxisPlugin(const Weights* weights, i
   memcpy(const_cast<void*>(biasWeights_.values), weights[1].values,
          biasWeights_.count * type2size(biasWeights_.type));
 
-  nbInputChannels_ = int(weights[0].count / nbOutputChannels_);
+  dimsAfterAxis_ = int(weights[0].count / nbOutputChannels_);
 }
 
 InnerProductWithAxisPlugin::InnerProductWithAxisPlugin(const void* data, size_t length)
 {
   const char *d = static_cast<const char*>(data), *a = d;
-  nbInputChannels_ = read<int>(d);
+  dimsAfterAxis_ = read<int>(d);
   nbOutputChannels_ = read<int>(d);
   axis_ = read<int>(d);
 
-  kernelWeights_.count = nbInputChannels_ * nbOutputChannels_;
+  kernelWeights_.count = dimsAfterAxis_ * nbOutputChannels_;
   kernelWeights_.values = nullptr;
 
   biasWeights_.count = read<int>(d);
@@ -93,7 +94,7 @@ Dims InnerProductWithAxisPlugin::getOutputDimensions(int index, const Dims* inpu
   int prod = 1;
   for (int i=axis_-1; i<inputs[0].nbDims; ++i)
     prod *= inputs[0].d[i];
-  assert(nbInputChannels_ == prod);
+  assert(dimsAfterAxis_ == prod);
   Dims d;
   d.nbDims = axis_;
   for (int i=0; i < axis_-1; ++i)
@@ -177,6 +178,44 @@ int InnerProductWithAxisPlugin::enqueue(int batchSize, const void* const* inputs
   //TODO wrt axis !!!
   // if cuda kernel needed, use a function compiled separately from a .cu
   // if only cublas / cudnn function used, can be done right here
+  float onef{1.0f}, zerof{0.0f};
+  __half oneh = fp16::__float2half(1.0f), zeroh = fp16::__float2half(0.0f);
+
+  cublasSetStream(cublas_, stream);
+  cudnnSetStream(cudnn_, stream);
+
+  if (dataType_ == DataType::kFLOAT)
+    {
+      CHECK(cublasSgemm(cublas_, CUBLAS_OP_N, CUBLAS_OP_N, dimsBeforeAxis_, nbOutputChannels_, dimsAfterAxis_, &onef,
+                        reinterpret_cast<const float*>(inputs[0]), dimsAfterAxis_,
+                        reinterpret_cast<const float*>(deviceKernel_), nbOutputChannels_,
+                        &zerof,
+                        reinterpret_cast<float*>(outputs[0]), dimsAfterAxis_));
+      // sampleplugin does the transpose operation, and thus have a transposed result ...
+      // CHECK(cublasSgemm(cublas_, CUBLAS_OP_T, CUBLAS_OP_N, nbOutputChannels_,dimsBeforeAxis_, dimsAfterAxis_, &onef,
+      //                   reinterpret_cast<const float*>(mDeviceKernel), dimsAfterAxis_,
+      //                   reinterpret_cast<const float*>(inputs[0]), dimsAfterAxis_, &zerof,
+      //                   reinterpret_cast<float*>(outputs[0]), nbOutputChannels_));
+    }
+  else
+    {
+      CHECK(cublasHgemm(cublas_, CUBLAS_OP_N, CUBLAS_OP_N, dimsBeforeAxis_, nbOutputChannels_, dimsAfterAxis_, &oneh,
+                        reinterpret_cast<const __half*>(inputs[0]), dimsAfterAxis_,
+                        reinterpret_cast<const __half*>(deviceKernel_), nbOutputChannels_,
+                        &zeroh,
+                        reinterpret_cast<__half*>(outputs[0]), dimsAfterAxis_));
+    }
+  // but sampleplugin uses results as if not transposed ...
+  if (biasWeights_.count)
+    {
+      cudnnDataType_t cudnnDT = dataType_ == DataType::kFLOAT ? CUDNN_DATA_FLOAT : CUDNN_DATA_HALF;
+      CHECK(cudnnSetTensor4dDescriptor(srcDescriptor_, CUDNN_TENSOR_NCHW, cudnnDT, 1, nbOutputChannels_, 1, 1));
+      CHECK(cudnnSetTensor4dDescriptor(dstDescriptor_, CUDNN_TENSOR_NCHW, cudnnDT, dimsBeforeAxis_, nbOutputChannels_, 1, 1));
+      CHECK(cudnnAddTensor(cudnn_, &onef, srcDescriptor_, deviceBias_, &onef, dstDescriptor_, outputs[0]));
+    }
+
+  return 0;
+
 }
 
 //!
@@ -186,7 +225,7 @@ int InnerProductWithAxisPlugin::enqueue(int batchSize, const void* const* inputs
 //!
 size_t InnerProductWithAxisPlugin::getSerializationSize() const
 {
-  return sizeof(nbInputChannels_) + sizeof(nbOutputChannels_) + sizeof(axis_) +sizeof(biasWeights_.count) + sizeof(dataType_) + (kernelWeights_.count + biasWeights_.count) * type2size(dataType_);
+  return sizeof(dimsAfterAxis_) + sizeof(nbOutputChannels_) + sizeof(axis_) +sizeof(biasWeights_.count) + sizeof(dataType_) + (kernelWeights_.count + biasWeights_.count) * type2size(dataType_);
 
 }
 
@@ -201,7 +240,7 @@ void InnerProductWithAxisPlugin::serialize(void* buffer) const
 {
   char *d = static_cast<char*>(buffer), *a = d;
 
-  write(d, nbInputChannels_);
+  write(d, dimsAfterAxis_);
   write(d, nbOutputChannels_);
   write(d, axis_);
   write(d, biasWeights_.count);
@@ -251,7 +290,10 @@ void InnerProductWithAxisPlugin::configurePlugin(const Dims* inputDims, int nbIn
                      const bool* inputIsBroadcast, const bool* outputIsBroadcast,
                      PluginFormat floatFormat, int maxBatchSize)
 {
-  //TODO store dimensions of input
+  ASSERT(nbInputs > axis_);
+  int dimsBeforeAxis_ = 1;
+  for (int i=0; i<axis_; ++i)
+    dimsBeforeAxis_ *= inputDims->d[i];
   return;
 }
 
