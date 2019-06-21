@@ -39,6 +39,7 @@ set(CAFFE_PARSER_SRCS
     caffeParser/opParsers/parseSigmoid.cpp
     caffeParser/opParsers/parseSoftMax.cpp
     caffeParser/opParsers/parseTanH.cpp
+    caffeParser/opParsers/parseLSTM.cpp
     caffeWeightFactory/caffeWeightFactory.cpp
     caffeParser/caffeParser.cpp
     NvCaffeParser.cpp
