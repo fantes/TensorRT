@@ -43,6 +43,7 @@ set(PLUGIN_LISTS
     flattenConcat
     cropAndResizePlugin
     proposalPlugin
+    innerProductWithAxisPlugin
     )
 
 include_directories(common common/kernels)

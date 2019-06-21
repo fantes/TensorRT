@@ -33,6 +33,7 @@ using namespace nvinfer1::plugin;
 #include "proposalPlugin/proposalPlugin.h"
 #include "regionPlugin/regionPlugin.h"
 #include "reorgPlugin/reorgPlugin.h"
+#include "innerProductWithAxisPlugin/innerProductWithAxisPlugin.h"
 
 using nvinfer1::plugin::RPROIParams;
 
@@ -106,6 +107,7 @@ bool initLibNvInferPlugins(void* logger, const char* libNamespace)
     initializePlugin<nvinfer1::plugin::FlattenConcatPluginCreator>(logger, libNamespace);
     initializePlugin<nvinfer1::plugin::CropAndResizePluginCreator>(logger, libNamespace);
     initializePlugin<nvinfer1::plugin::ProposalPluginCreator>(logger, libNamespace);
+    initializePlugin<nvinfer1::plugin::InnerProductWithAxisPluginCreator>(logger, libNamespace);
     return true;
 }
 } // extern "C"

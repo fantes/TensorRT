@@ -242,6 +242,45 @@ std::vector<nvinfer1::PluginField> CaffeParser::parseLReLUParam(const trtcaffe::
     f.emplace_back("negSlope", negSlope, PluginFieldType::kFLOAT32, 1);
     return f;
 }
+
+std::vector<nvinfer1::PluginField> CaffeParser::parseInnerProductWithAxisParam(const trtcaffe::LayerParameter& msg, CaffeWeightFactory& weightFactory, BlobNameToTensor& tensors)
+{
+  std::vector<nvinfer1::PluginField> f;
+  const trtcaffe::InnerProductParameter& p = msg.inner_product_param();
+  auto* axis = allocMemory<int>();
+  auto* nbout = allocMemory<int>();
+  *axis = p.axis();
+  *nbout = p.num_output();
+  f.emplace_back("axis", axis, PluginFieldType::kINT32, 1);
+  f.emplace_back("nbout", nbout, PluginFieldType::kINT32, 1);
+
+
+  std::vector<Weights> w;
+  // If .caffemodel is not provided, need to randomize the weight
+  if (!weightFactory.isInitialized())
+    {
+      int C = parserutils::getCHW(tensors[msg.bottom(0)]->getDimensions()).c();
+      w.emplace_back(weightFactory.allocateWeights(C, std::normal_distribution<float>(0.0F, 1.0F)));
+    }
+  else
+    {
+      // Use the provided weight from .caffemodel
+      w = weightFactory.getAllWeights(msg.name());
+    }
+
+  for (auto weight : w)
+    {
+      f.emplace_back("weights", weight.values, PluginFieldType::kFLOAT32, weight.count);
+    }
+
+  int* nbWeights = allocMemory<int32_t>();
+  *nbWeights = w.size();
+  f.emplace_back("nbWeights", nbWeights, PluginFieldType::kINT32, 1);
+
+
+  return f;
+}
+
 std::vector<nvinfer1::PluginField> CaffeParser::parseRPROIParam(const trtcaffe::LayerParameter& msg, CaffeWeightFactory& weightFactory, BlobNameToTensor& tensors)
 {
     std::vector<nvinfer1::PluginField> f;
@@ -343,8 +382,9 @@ const IBlobNameToTensor* CaffeParser::parse(const char* deployFile,
                                             INetworkDefinition& network,
                                             DataType weightType)
 {
-    CHECK_NULL_RET_NULL(deployFile)
+  CHECK_NULL_RET_NULL(deployFile)
 
+    std::cout << "inside custom parser" << std::endl;
     // this is used to deal with dropout layers which have different input and output
     mModel = std::unique_ptr<trtcaffe::NetParameter>(new trtcaffe::NetParameter);
     if (modelFile && !readBinaryProto(mModel.get(), modelFile, mProtobufBufferSize))
@@ -520,6 +560,11 @@ const IBlobNameToTensor* CaffeParser::parse(INetworkDefinition& network,
                     pluginName = "RPROI_TRT";
                     f = parseRPROIParam(layerMsg, weights, *mBlobNameToTensor);
                 }
+                else if (layerMsg.type() == "InnerProductWithAxis")
+                  {
+                    pluginName = "InnerProductWithAxis";
+                    f = parseInnerProductWithAxisParam(layerMsg, weights, *mBlobNameToTensor);
+                  }
 
                 if (mPluginRegistry.find(pluginName) != mPluginRegistry.end())
                 {

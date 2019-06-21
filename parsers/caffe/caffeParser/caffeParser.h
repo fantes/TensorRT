@@ -64,6 +64,7 @@ private:
     std::vector<nvinfer1::PluginField> parseDetectionOutputParam(const trtcaffe::LayerParameter& msg, CaffeWeightFactory& weightFactory, BlobNameToTensor& tensors);
     std::vector<nvinfer1::PluginField> parseLReLUParam(const trtcaffe::LayerParameter& msg, CaffeWeightFactory& weightFactory, BlobNameToTensor& tensors);
     std::vector<nvinfer1::PluginField> parseRPROIParam(const trtcaffe::LayerParameter& msg, CaffeWeightFactory& weightFactory, BlobNameToTensor& tensors);
+    std::vector<nvinfer1::PluginField> parseInnerProductWithAxisParam(const trtcaffe::LayerParameter& msg, CaffeWeightFactory& weightFactory, BlobNameToTensor& tensors);
     template <typename T>
     T* allocMemory(int size = 1)
     {
