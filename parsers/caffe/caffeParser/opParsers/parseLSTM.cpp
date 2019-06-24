@@ -23,23 +23,25 @@ ILayer* parseLSTM(INetworkDefinition& network, const trtcaffe::LayerParameter& m
 {
     const trtcaffe::RecurrentParameter& p = msg.recurrent_param();
 
-    int64_t seq_size = p.time_step();
-    //int64_t nbInputs = parserutils::volume(parserutils::getCHW(tensors[msg.bottom(0)]->getDimensions()));
-    int64_t nbOutputs = p.num_output();
+    int64_t nout = p.num_output();
+    int seq_size = tensors[msg.bottom(0)]->getDimensions().d[0];
+    int datasize = tensors[msg.bottom(0)]->getDimensions().d[1];
 
-    // Weights kernelWeights = weightFactory.isInitialized() ? weightFactory(msg.name(), WeightType::kGENERIC) : weightFactory.allocateWeights(nbInputs * nbOutputs, std::normal_distribution<float>(0.0F, std_dev));
-    // Weights biasWeights = !p.has_bias_term() || p.bias_term() ? (weightFactory.isInitialized() ? weightFactory(msg.name(), WeightType::kBIAS) : weightFactory.allocateWeights(nbOutputs)) : weightFactory.getNullWeights();
 
-    // weightFactory.convert(kernelWeights);
-    // weightFactory.convert(biasWeights);
+    std::cout << "input datasize: " << datasize << std::endl;
+    std::cout << "input seq_size: " << seq_size << std::endl;
 
-    std::cout << "LSTM seq_size:" << seq_size << std::endl;
-    ILayer * lstm =network.addRNNv2(*tensors[msg.bottom(0)], 1, nbOutputs, seq_size, nvinfer1::RNNOperation::kLSTM);
-    std::cout << "lstm input " << std::endl;
-    ITensor * it = tensors[msg.bottom(0)];
-    std::cout << " dims :" <<it->getDimensions().nbDims << std::endl;
-    for (int  j=0; j< it->getDimensions().nbDims; ++j)
-      std::cout <<  "     dim " << j <<  " : "  << it->getDimensions().d[j] << std::endl;
+
+    std::vector<Weights> allLSTMWeights = weightFactory.getAllWeights(msg.name());
+    std::cout << "number of lstm weights structs: " << allLSTMWeights.size() << std::endl;
+
+    for (int i=0; i< allLSTMWeights.size(); ++i)
+      {
+        std::cout << "w" << i << " size: " << allLSTMWeights[i].count << std::endl;
+      }
+
+
+    IRNNv2Layer * lstm =network.addRNNv2(*tensors[msg.bottom(0)], 1, nout, seq_size, nvinfer1::RNNOperation::kLSTM);
     for (int i=0; i< lstm->getNbOutputs(); ++i)
       {
         std::cout << "lstm output " << i << std::endl;
@@ -48,7 +50,59 @@ ILayer* parseLSTM(INetworkDefinition& network, const trtcaffe::LayerParameter& m
         for (int  j=0; j< it->getDimensions().nbDims; ++j)
           std::cout <<  "     dim " << j <<  " : "  << it->getDimensions().d[j] << std::endl;
       }
+
+    const float * weight_xc_data = static_cast<const float*>(allLSTMWeights[0].values);
+    const float * bias_c_data = static_cast<const float*>(allLSTMWeights[1].values);
+    const float * weight_hc_data = static_cast<const float*>(allLSTMWeights[2].values);
+
+    std::vector<float> zeros(nout, 0.0);
+
+          // nvinfer1::Weights iww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          // nvinfer1::Weights iwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+
+    nvinfer1::Weights ibw{nvinfer1::DataType::kFLOAT,bias_c_data,nout};
+    nvinfer1::Weights ibr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
+
+          // nvinfer1::Weights fww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          // nvinfer1::Weights fwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+
+    nvinfer1::Weights fbw{nvinfer1::DataType::kFLOAT,bias_c_data + nout, nout};
+    nvinfer1::Weights fbr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
+
+          // nvinfer1::Weights oww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          // nvinfer1::Weights owr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+
+    nvinfer1::Weights obw{nvinfer1::DataType::kFLOAT,bias_c_data+ 2*nout, nout};
+    nvinfer1::Weights obr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
+
+          // nvinfer1::Weights cww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          // nvinfer1::Weights cwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+
+    nvinfer1::Weights cbw{nvinfer1::DataType::kFLOAT,bias_c_data + 3*nout , nout};
+    nvinfer1::Weights cbr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
+
+          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kINPUT, true, iww);
+    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kINPUT, true, ibw);
+          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kINPUT, false, iwr);
+    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kINPUT, false, ibr);
+
+          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kFORGET, true, fww);
+    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kFORGET, true, fbw);
+          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kFORGET, false, fwr);
+    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kFORGET, false, fbr);
+
+
+          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kOUTPUT, true, oww);
+    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kOUTPUT, true, obw);
+          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kOUTPUT, false, owr);
+    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kOUTPUT, false, obr);
+
+          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kCELL, true, cww);
+    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kCELL, true, cbw);
+          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kCELL, false, cwr);
+    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kCELL, false, cbr);
+
+
     return lstm;
-    //return network.addFullyConnected(*tensors[msg.bottom(0)], p.num_output(), kernelWeights, biasWeights);
 }
 } //namespace nvcaffeparser1

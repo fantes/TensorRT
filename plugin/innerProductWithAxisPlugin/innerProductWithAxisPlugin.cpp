@@ -18,25 +18,38 @@ PluginFieldCollection InnerProductWithAxisPluginCreator::mFC{};
 std::vector<PluginField> InnerProductWithAxisPluginCreator::mPluginAttributes;
 
 
-InnerProductWithAxisPlugin::InnerProductWithAxisPlugin(const Weights* weights, int nbWeights, int axis, int nbOutputChannels) : axis_(axis), nbOutputChannels_(nbOutputChannels)
+InnerProductWithAxisPlugin::InnerProductWithAxisPlugin(const Weights* weights, const Weights* biases, int axis, int nbOutputChannels) : axis_(axis), nbOutputChannels_(nbOutputChannels)
 {
-  assert(nbWeights == 2);
-
   kernelWeights_ = weights[0];
   assert(kernelWeights_.type == DataType::kFLOAT || kernelWeights_.type == DataType::kHALF);
 
-  biasWeights_ = weights[1];
+  biasWeights_ = biases[0];
+  std::cout << "biaswcount: " << biasWeights_.count << std::endl;
+  std::cout << "nbout: " << nbOutputChannels << std::endl;
+
   assert(biasWeights_.count == 0 || biasWeights_.count == nbOutputChannels_);
   assert(biasWeights_.type == DataType::kFLOAT || biasWeights_.type == DataType::kHALF);
 
   kernelWeights_.values = malloc(kernelWeights_.count * type2size(kernelWeights_.type));
   memcpy(const_cast<void*>(kernelWeights_.values), weights[0].values,
          kernelWeights_.count * type2size(kernelWeights_.type));
+
   biasWeights_.values = malloc(biasWeights_.count * type2size(biasWeights_.type));
-  memcpy(const_cast<void*>(biasWeights_.values), weights[1].values,
+  memcpy(const_cast<void*>(biasWeights_.values), biases[0].values,
          biasWeights_.count * type2size(biasWeights_.type));
 
   dimsAfterAxis_ = int(weights[0].count / nbOutputChannels_);
+
+
+  CHECK(cudnnCreate(&cudnn_)); // initialize cudnn and cublas
+  CHECK(cublasCreate(&cublas_));
+  CHECK(cudnnCreateTensorDescriptor(&srcDescriptor_));
+  CHECK(cudnnCreateTensorDescriptor(&dstDescriptor_));
+  if (kernelWeights_.values)
+    convertAndCopyToDevice(deviceKernel_, kernelWeights_);
+  if (biasWeights_.values)
+    convertAndCopyToDevice(deviceBias_, biasWeights_);
+
 }
 
 InnerProductWithAxisPlugin::InnerProductWithAxisPlugin(const void* data, size_t length)
@@ -49,7 +62,7 @@ InnerProductWithAxisPlugin::InnerProductWithAxisPlugin(const void* data, size_t 
   kernelWeights_.count = dimsAfterAxis_ * nbOutputChannels_;
   kernelWeights_.values = nullptr;
 
-  biasWeights_.count = read<int>(d);
+  biasWeights_.count = nbOutputChannels_;
   biasWeights_.values = nullptr;
 
   dataType_  = read<DataType>(d);
@@ -126,15 +139,16 @@ bool InnerProductWithAxisPlugin::supportsFormat(DataType type, PluginFormat form
 //!
 int InnerProductWithAxisPlugin::initialize()
 {
-  CHECK(cudnnCreate(&cudnn_)); // initialize cudnn and cublas
-  CHECK(cublasCreate(&cublas_));
-  CHECK(cudnnCreateTensorDescriptor(&srcDescriptor_)); // create cudnn tensor descriptors we need for bias addition
-  CHECK(cudnnCreateTensorDescriptor(&dstDescriptor_));
-  if (kernelWeights_.values)
-    convertAndCopyToDevice(deviceKernel_, kernelWeights_);
-  if (biasWeights_.values)
-    convertAndCopyToDevice(deviceBias_, biasWeights_);
-  return 0;
+
+  // CHECK(cudnnCreate(&cudnn_)); // initialize cudnn and cublas
+  // CHECK(cublasCreate(&cublas_));
+  // CHECK(cudnnCreateTensorDescriptor(&srcDescriptor_)); // create cudnn tensor descriptors we need for bias addition
+  // CHECK(cudnnCreateTensorDescriptor(&dstDescriptor_));
+  // if (kernelWeights_.values)
+  //   convertAndCopyToDevice(deviceKernel_, kernelWeights_);
+  // if (biasWeights_.values)
+  //   convertAndCopyToDevice(deviceBias_, biasWeights_);
+  return STATUS_SUCCESS;
 }
 
 //!
@@ -225,7 +239,7 @@ int InnerProductWithAxisPlugin::enqueue(int batchSize, const void* const* inputs
 //!
 size_t InnerProductWithAxisPlugin::getSerializationSize() const
 {
-  return sizeof(dimsAfterAxis_) + sizeof(nbOutputChannels_) + sizeof(axis_) +sizeof(biasWeights_.count) + sizeof(dataType_) + (kernelWeights_.count + biasWeights_.count) * type2size(dataType_);
+  return sizeof(dimsAfterAxis_) + sizeof(nbOutputChannels_) + sizeof(axis_) + sizeof(dataType_) + (kernelWeights_.count + biasWeights_.count) * type2size(dataType_);
 
 }
 
@@ -243,7 +257,6 @@ void InnerProductWithAxisPlugin::serialize(void* buffer) const
   write(d, dimsAfterAxis_);
   write(d, nbOutputChannels_);
   write(d, axis_);
-  write(d, biasWeights_.count);
   write(d, dataType_);
   convertAndCopyToBuffer(d, kernelWeights_);
   convertAndCopyToBuffer(d, biasWeights_);
@@ -283,6 +296,9 @@ const char* InnerProductWithAxisPlugin::getPluginNamespace() const
 
 IPluginV2Ext* InnerProductWithAxisPlugin::clone() const
 {
+  auto* plugin = new InnerProductWithAxisPlugin(&kernelWeights_, &biasWeights_ , axis_, nbOutputChannels_);
+  plugin->setPluginNamespace(namespace_.c_str());
+  return plugin;
 }
 
 void InnerProductWithAxisPlugin::configurePlugin(const Dims* inputDims, int nbInputs, const Dims* outputDims,
@@ -378,20 +394,16 @@ const PluginFieldCollection* InnerProductWithAxisPluginCreator::getFieldNames()
 IPluginV2Ext* InnerProductWithAxisPluginCreator::createPlugin(const char* name, const PluginFieldCollection* fc)
 {
   std::vector<float> weightValues;
+  std::vector<float> biasesValues;
   const PluginField* fields = fc->fields;
 
-  int nbWeights, axis, nbout;
+  int  axis, nbout;
 
 
   for (int i = 0; i < fc->nbFields; ++i)
     {
       const char* attrName = fields[i].name;
-      if (!strcmp(attrName, "nbWeights"))
-        {
-          ASSERT(fields[i].type == PluginFieldType::kINT32);
-          nbWeights = static_cast<int>(*(static_cast<const int*>(fields[i].data)));
-        }
-      else if (!strcmp(attrName, "axis"))
+      if (!strcmp(attrName, "axis"))
         {
           ASSERT(fields[i].type == PluginFieldType::kINT32);
           axis = *(static_cast<const int*>(fields[i].data));
@@ -413,11 +425,24 @@ IPluginV2Ext* InnerProductWithAxisPluginCreator::createPlugin(const char* name, 
               w++;
             }
         }
+      else if (!strcmp(attrName, "biases"))
+        {
+          ASSERT(fields[i].type == PluginFieldType::kFLOAT32);
+          int size = fields[i].length;
+          biasesValues.reserve(size);
+          const auto* w = static_cast<const float*>(fields[i].data);
+          for (int j = 0; j < size; j++)
+            {
+              biasesValues.push_back(*w);
+              w++;
+            }
+        }
 
     }
   Weights weights{DataType::kFLOAT, weightValues.data(), (int64_t) weightValues.size()};
+  Weights biases{DataType::kFLOAT, biasesValues.data(), (int64_t) biasesValues.size()};
 
-  auto* plugin = new InnerProductWithAxisPlugin(&weights, nbWeights, axis, nbout);
+  auto* plugin = new InnerProductWithAxisPlugin(&weights, &biases, axis, nbout);
   plugin->setPluginNamespace(mNamespace.c_str());
   return plugin;
 }

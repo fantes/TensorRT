@@ -268,15 +268,10 @@ std::vector<nvinfer1::PluginField> CaffeParser::parseInnerProductWithAxisParam(c
       w = weightFactory.getAllWeights(msg.name());
     }
 
-  for (auto weight : w)
-    {
-      f.emplace_back("weights", weight.values, PluginFieldType::kFLOAT32, weight.count);
-    }
 
-  int* nbWeights = allocMemory<int32_t>();
-  *nbWeights = w.size();
-  f.emplace_back("nbWeights", nbWeights, PluginFieldType::kINT32, 1);
-
+  f.emplace_back("weights", w[0].values, PluginFieldType::kFLOAT32, w[0].count);
+  if (w.size() > 1)
+    f.emplace_back("biases", w[1].values, PluginFieldType::kFLOAT32, w[1].count);
 
   return f;
 }
@@ -508,7 +503,9 @@ const IBlobNameToTensor* CaffeParser::parse(INetworkDefinition& network,
                 {
                     RETURN_AND_LOG_ERROR(nullptr, "Both IPluginFactory and IPluginFactoryV2 are set. If using TensorRT 5.0 or later, switch to IPluginFactoryV2");
                 }
-                std::vector<Weights> w = weights.getAllWeights(layerMsg.name());
+
+                std::vector<Weights> w;
+                w = weights.getAllWeights(layerMsg.name());
                 nvinfer1::IPluginV2* plugin = mPluginFactoryV2->createPlugin(layerMsg.name().c_str(), w.empty() ? nullptr : &w[0], w.size(), mPluginNamespace.c_str());
                 std::vector<ITensor*> inputs;
                 for (int i = 0, n = layerMsg.bottom_size(); i < n; i++)
