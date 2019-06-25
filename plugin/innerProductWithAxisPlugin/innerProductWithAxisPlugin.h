@@ -21,7 +21,7 @@ class InnerProductWithAxisPlugin : public IPluginV2Ext
 public:
   // API constructor
 
-  InnerProductWithAxisPlugin(const Weights* weights, const Weights* biases, int axis, int nbOutputChannels);
+  InnerProductWithAxisPlugin(const Weights* weights, const Weights* biases, int axis, int nbOutputChannels, int dimsBeforeAxis);
 
   // constructor for deserialization
   InnerProductWithAxisPlugin(const void* data, size_t length);

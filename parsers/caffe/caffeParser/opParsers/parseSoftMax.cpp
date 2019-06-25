@@ -21,6 +21,19 @@ namespace nvcaffeparser1
 {
 ILayer* parseSoftMax(INetworkDefinition& network, const trtcaffe::LayerParameter& msg, CaffeWeightFactory& /*weightFactory*/, BlobNameToTensor& tensors)
 {
+
+
+  std::cout << "Softmax input size: " ;
+  for (int i=0; i< tensors[msg.bottom(0)]->getDimensions().nbDims; ++i)
+    {
+      std::cout << tensors[msg.bottom(0)]->getDimensions().d[i]  << " " ;
+    }
+  std::cout << std::endl;
+
+  int seq_size = tensors[msg.bottom(0)]->getDimensions().d[0];
+  int isize = tensors[msg.bottom(0)]->getDimensions().d[1];
+
+
     if (!checkBlobs(msg, 1, 1))
     {
         return nullptr;
@@ -55,6 +68,7 @@ ILayer* parseSoftMax(INetworkDefinition& network, const trtcaffe::LayerParameter
     if (hasAxis)
     {
         uint32_t axes = 1u << (axis - 1);
+        std::cout << "softmax: setting axis to " << axes << std::endl;
         softmax->setAxes(axes);
     }
     return softmax;

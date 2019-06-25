@@ -18,14 +18,14 @@ PluginFieldCollection InnerProductWithAxisPluginCreator::mFC{};
 std::vector<PluginField> InnerProductWithAxisPluginCreator::mPluginAttributes;
 
 
-InnerProductWithAxisPlugin::InnerProductWithAxisPlugin(const Weights* weights, const Weights* biases, int axis, int nbOutputChannels) : axis_(axis), nbOutputChannels_(nbOutputChannels)
+InnerProductWithAxisPlugin::InnerProductWithAxisPlugin(const Weights* weights, const Weights* biases, int axis, int nbOutputChannels, int dimsBeforeAxis) : axis_(axis), nbOutputChannels_(nbOutputChannels), dimsBeforeAxis_(dimsBeforeAxis)
 {
   kernelWeights_ = weights[0];
   assert(kernelWeights_.type == DataType::kFLOAT || kernelWeights_.type == DataType::kHALF);
 
   biasWeights_ = biases[0];
-  std::cout << "biaswcount: " << biasWeights_.count << std::endl;
-  std::cout << "nbout: " << nbOutputChannels << std::endl;
+  std::cout << "InnerProductWithAxis biaswcount: " << biasWeights_.count << std::endl;
+  std::cout << "InnerProductWithAxis nbout: " << nbOutputChannels << std::endl;
 
   assert(biasWeights_.count == 0 || biasWeights_.count == nbOutputChannels_);
   assert(biasWeights_.type == DataType::kFLOAT || biasWeights_.type == DataType::kHALF);
@@ -39,7 +39,6 @@ InnerProductWithAxisPlugin::InnerProductWithAxisPlugin(const Weights* weights, c
          biasWeights_.count * type2size(biasWeights_.type));
 
   dimsAfterAxis_ = int(weights[0].count / nbOutputChannels_);
-
 
   CHECK(cudnnCreate(&cudnn_)); // initialize cudnn and cublas
   CHECK(cublasCreate(&cublas_));
@@ -55,6 +54,7 @@ InnerProductWithAxisPlugin::InnerProductWithAxisPlugin(const Weights* weights, c
 InnerProductWithAxisPlugin::InnerProductWithAxisPlugin(const void* data, size_t length)
 {
   const char *d = static_cast<const char*>(data), *a = d;
+  dimsBeforeAxis_ = read<int>(d);
   dimsAfterAxis_ = read<int>(d);
   nbOutputChannels_ = read<int>(d);
   axis_ = read<int>(d);
@@ -105,14 +105,18 @@ Dims InnerProductWithAxisPlugin::getOutputDimensions(int index, const Dims* inpu
 {
   assert(index == 0 && nbInputDims == 1);
   int prod = 1;
-  for (int i=axis_-1; i<inputs[0].nbDims; ++i)
+  for (int i=axis_; i<inputs[0].nbDims; ++i)
     prod *= inputs[0].d[i];
   assert(dimsAfterAxis_ == prod);
   Dims d;
-  d.nbDims = axis_;
-  for (int i=0; i < axis_-1; ++i)
+  d.nbDims = axis_ + 1;
+  for (int i=0; i < axis_; ++i)
     d.d[i] = inputs[0].d[i];
-  d.d[axis_-1] = nbOutputChannels_;
+  d.d[axis_] = nbOutputChannels_;
+  std::cout << "InnerProductWithAxis output dimensions: ";
+  for (int i=0; i<axis_; ++i)
+    std::cout << d.d[i] << " " ;
+  std::cout << std::endl;
   return d;
 }
 
@@ -200,31 +204,26 @@ int InnerProductWithAxisPlugin::enqueue(int batchSize, const void* const* inputs
 
   if (dataType_ == DataType::kFLOAT)
     {
-      CHECK(cublasSgemm(cublas_, CUBLAS_OP_N, CUBLAS_OP_N, dimsBeforeAxis_, nbOutputChannels_, dimsAfterAxis_, &onef,
-                        reinterpret_cast<const float*>(inputs[0]), dimsAfterAxis_,
-                        reinterpret_cast<const float*>(deviceKernel_), nbOutputChannels_,
+      CHECK(cublasSgemm(cublas_, CUBLAS_OP_N, CUBLAS_OP_N, dimsBeforeAxis_*batchSize, nbOutputChannels_, dimsAfterAxis_, &onef,
+                        reinterpret_cast<const float*>(inputs[0]), dimsBeforeAxis_*batchSize,
+                        reinterpret_cast<const float*>(deviceKernel_), dimsAfterAxis_,
                         &zerof,
-                        reinterpret_cast<float*>(outputs[0]), dimsAfterAxis_));
-      // sampleplugin does the transpose operation, and thus have a transposed result ...
-      // CHECK(cublasSgemm(cublas_, CUBLAS_OP_T, CUBLAS_OP_N, nbOutputChannels_,dimsBeforeAxis_, dimsAfterAxis_, &onef,
-      //                   reinterpret_cast<const float*>(mDeviceKernel), dimsAfterAxis_,
-      //                   reinterpret_cast<const float*>(inputs[0]), dimsAfterAxis_, &zerof,
-      //                   reinterpret_cast<float*>(outputs[0]), nbOutputChannels_));
+                        reinterpret_cast<float*>(outputs[0]), dimsBeforeAxis_*batchSize));
     }
   else
     {
-      CHECK(cublasHgemm(cublas_, CUBLAS_OP_N, CUBLAS_OP_N, dimsBeforeAxis_, nbOutputChannels_, dimsAfterAxis_, &oneh,
-                        reinterpret_cast<const __half*>(inputs[0]), dimsAfterAxis_,
-                        reinterpret_cast<const __half*>(deviceKernel_), nbOutputChannels_,
+      CHECK(cublasHgemm(cublas_, CUBLAS_OP_N, CUBLAS_OP_N, dimsBeforeAxis_ * batchSize, nbOutputChannels_, dimsAfterAxis_, &oneh,
+                        reinterpret_cast<const __half*>(inputs[0]), dimsBeforeAxis_ * batchSize,
+                        reinterpret_cast<const __half*>(deviceKernel_), dimsAfterAxis_,
                         &zeroh,
-                        reinterpret_cast<__half*>(outputs[0]), dimsAfterAxis_));
+                        reinterpret_cast<__half*>(outputs[0]), dimsBeforeAxis_ * batchSize));
     }
-  // but sampleplugin uses results as if not transposed ...
+
   if (biasWeights_.count)
     {
       cudnnDataType_t cudnnDT = dataType_ == DataType::kFLOAT ? CUDNN_DATA_FLOAT : CUDNN_DATA_HALF;
       CHECK(cudnnSetTensor4dDescriptor(srcDescriptor_, CUDNN_TENSOR_NCHW, cudnnDT, 1, nbOutputChannels_, 1, 1));
-      CHECK(cudnnSetTensor4dDescriptor(dstDescriptor_, CUDNN_TENSOR_NCHW, cudnnDT, dimsBeforeAxis_, nbOutputChannels_, 1, 1));
+      CHECK(cudnnSetTensor4dDescriptor(dstDescriptor_, CUDNN_TENSOR_NCHW, cudnnDT, dimsBeforeAxis_*batchSize, nbOutputChannels_, 1, 1));
       CHECK(cudnnAddTensor(cudnn_, &onef, srcDescriptor_, deviceBias_, &onef, dstDescriptor_, outputs[0]));
     }
 
@@ -239,7 +238,7 @@ int InnerProductWithAxisPlugin::enqueue(int batchSize, const void* const* inputs
 //!
 size_t InnerProductWithAxisPlugin::getSerializationSize() const
 {
-  return sizeof(dimsAfterAxis_) + sizeof(nbOutputChannels_) + sizeof(axis_) + sizeof(dataType_) + (kernelWeights_.count + biasWeights_.count) * type2size(dataType_);
+  return sizeof(dimsBeforeAxis_) + sizeof(dimsAfterAxis_) + sizeof(nbOutputChannels_) + sizeof(axis_) + sizeof(dataType_) + (kernelWeights_.count + biasWeights_.count) * type2size(dataType_);
 
 }
 
@@ -254,6 +253,7 @@ void InnerProductWithAxisPlugin::serialize(void* buffer) const
 {
   char *d = static_cast<char*>(buffer), *a = d;
 
+  write(d, dimsBeforeAxis_);
   write(d, dimsAfterAxis_);
   write(d, nbOutputChannels_);
   write(d, axis_);
@@ -296,7 +296,7 @@ const char* InnerProductWithAxisPlugin::getPluginNamespace() const
 
 IPluginV2Ext* InnerProductWithAxisPlugin::clone() const
 {
-  auto* plugin = new InnerProductWithAxisPlugin(&kernelWeights_, &biasWeights_ , axis_, nbOutputChannels_);
+  auto* plugin = new InnerProductWithAxisPlugin(&kernelWeights_, &biasWeights_ , axis_, nbOutputChannels_, dimsBeforeAxis_);
   plugin->setPluginNamespace(namespace_.c_str());
   return plugin;
 }
@@ -306,8 +306,9 @@ void InnerProductWithAxisPlugin::configurePlugin(const Dims* inputDims, int nbIn
                      const bool* inputIsBroadcast, const bool* outputIsBroadcast,
                      PluginFormat floatFormat, int maxBatchSize)
 {
-  ASSERT(nbInputs > axis_);
-  int dimsBeforeAxis_ = 1;
+  std::cout << "configuring ipA   nbidims : " << inputDims->nbDims << "   axis: " << axis_ << std::endl;
+  ASSERT(inputDims->nbDims > axis_);
+  dimsBeforeAxis_ = 1;
   for (int i=0; i<axis_; ++i)
     dimsBeforeAxis_ *= inputDims->d[i];
   return;
@@ -315,6 +316,7 @@ void InnerProductWithAxisPlugin::configurePlugin(const Dims* inputDims, int nbIn
 
 nvinfer1::DataType InnerProductWithAxisPlugin::getOutputDataType(int index, const nvinfer1::DataType* inputTypes, int nbInputs) const
 {
+  return dataType_;
 }
 
 
@@ -442,7 +444,7 @@ IPluginV2Ext* InnerProductWithAxisPluginCreator::createPlugin(const char* name, 
   Weights weights{DataType::kFLOAT, weightValues.data(), (int64_t) weightValues.size()};
   Weights biases{DataType::kFLOAT, biasesValues.data(), (int64_t) biasesValues.size()};
 
-  auto* plugin = new InnerProductWithAxisPlugin(&weights, &biases, axis, nbout);
+  auto* plugin = new InnerProductWithAxisPlugin(&weights, &biases, axis, nbout,-1);
   plugin->setPluginNamespace(mNamespace.c_str());
   return plugin;
 }

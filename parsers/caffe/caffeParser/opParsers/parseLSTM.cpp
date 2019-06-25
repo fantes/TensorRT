@@ -14,6 +14,7 @@
  */
 
 #include "opParsers.h"
+#include "half.h"
 
 using namespace nvinfer1;
 
@@ -25,10 +26,10 @@ ILayer* parseLSTM(INetworkDefinition& network, const trtcaffe::LayerParameter& m
 
     int64_t nout = p.num_output();
     int seq_size = tensors[msg.bottom(0)]->getDimensions().d[0];
-    int datasize = tensors[msg.bottom(0)]->getDimensions().d[1];
+    int isize = tensors[msg.bottom(0)]->getDimensions().d[1];
 
 
-    std::cout << "input datasize: " << datasize << std::endl;
+    std::cout << "input isize: " << isize << std::endl;
     std::cout << "input seq_size: " << seq_size << std::endl;
 
 
@@ -51,56 +52,72 @@ ILayer* parseLSTM(INetworkDefinition& network, const trtcaffe::LayerParameter& m
           std::cout <<  "     dim " << j <<  " : "  << it->getDimensions().d[j] << std::endl;
       }
 
-    const float * weight_xc_data = static_cast<const float*>(allLSTMWeights[0].values);
-    const float * bias_c_data = static_cast<const float*>(allLSTMWeights[1].values);
-    const float * weight_hc_data = static_cast<const float*>(allLSTMWeights[2].values);
+    if (weightFactory.getDataType() == DataType::kHALF)
+      {
+        for (int i=0; i<allLSTMWeights.size(); ++i)
+          weightFactory.convert(allLSTMWeights[i]);
+        const float16 * winput = static_cast<const float16*>(allLSTMWeights[0].values);
+        const float16 * bias_c_data = static_cast<const float16 *>(allLSTMWeights[1].values);
+        const float16 * wrec = static_cast<const float16 *>(allLSTMWeights[2].values);
+        std::vector<float16> zeros(nout, float16(0.0));
+      }
+    else
+      {
+        const float * winput = static_cast<const float*>(allLSTMWeights[0].values);
+        const float * bias_c_data = static_cast<const float*>(allLSTMWeights[1].values);
+        const float * wrec = static_cast<const float*>(allLSTMWeights[2].values);
+        std::vector<float> zeros(nout, 0.0);
 
-    std::vector<float> zeros(nout, 0.0);
+        //weight xc should be hidden x input
+        // same order as ncnn
+        // weight rc are hidden x hidden -> !! rc x hidden  (matrix first !! )
+        // same as ncnn also
 
-          // nvinfer1::Weights iww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-          // nvinfer1::Weights iwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+        nvinfer1::Weights iww{nvinfer1::DataType::kFLOAT,winput, nout * isize};
+        nvinfer1::Weights iwr{nvinfer1::DataType::kFLOAT,wrec, nout * nout};
 
-    nvinfer1::Weights ibw{nvinfer1::DataType::kFLOAT,bias_c_data,nout};
-    nvinfer1::Weights ibr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
+        nvinfer1::Weights ibw{nvinfer1::DataType::kFLOAT,bias_c_data,nout};
+        nvinfer1::Weights ibr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
 
-          // nvinfer1::Weights fww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-          // nvinfer1::Weights fwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+        nvinfer1::Weights fww{nvinfer1::DataType::kFLOAT, winput + nout*isize, nout * isize};
+        nvinfer1::Weights fwr{nvinfer1::DataType::kFLOAT,wrec + nout*nout, nout * nout};
 
-    nvinfer1::Weights fbw{nvinfer1::DataType::kFLOAT,bias_c_data + nout, nout};
-    nvinfer1::Weights fbr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
+        nvinfer1::Weights fbw{nvinfer1::DataType::kFLOAT,bias_c_data + nout, nout};
+        nvinfer1::Weights fbr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
 
-          // nvinfer1::Weights oww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-          // nvinfer1::Weights owr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+        nvinfer1::Weights oww{nvinfer1::DataType::kFLOAT, winput + 2*nout*isize, nout * isize};
+        nvinfer1::Weights owr{nvinfer1::DataType::kFLOAT,wrec + 2*nout*nout, nout * nout};
 
-    nvinfer1::Weights obw{nvinfer1::DataType::kFLOAT,bias_c_data+ 2*nout, nout};
-    nvinfer1::Weights obr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
+        nvinfer1::Weights obw{nvinfer1::DataType::kFLOAT,bias_c_data+ 2*nout, nout};
+        nvinfer1::Weights obr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
 
-          // nvinfer1::Weights cww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-          // nvinfer1::Weights cwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+        nvinfer1::Weights cww{nvinfer1::DataType::kFLOAT,winput + 3*nout*isize,nout * isize};
+        nvinfer1::Weights cwr{nvinfer1::DataType::kFLOAT,wrec + 3*nout*nout, nout * nout};
 
-    nvinfer1::Weights cbw{nvinfer1::DataType::kFLOAT,bias_c_data + 3*nout , nout};
-    nvinfer1::Weights cbr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
+        nvinfer1::Weights cbw{nvinfer1::DataType::kFLOAT,bias_c_data + 3*nout , nout};
+        nvinfer1::Weights cbr{nvinfer1::DataType::kFLOAT,zeros.data(),nout};
 
-          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kINPUT, true, iww);
-    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kINPUT, true, ibw);
-          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kINPUT, false, iwr);
-    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kINPUT, false, ibr);
+        lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kINPUT, true, iww);
+        lstm->setBiasForGate(0, nvinfer1::RNNGateType::kINPUT, true, ibw);
+        lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kINPUT, false, iwr);
+        lstm->setBiasForGate(0, nvinfer1::RNNGateType::kINPUT, false, ibr);
 
-          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kFORGET, true, fww);
-    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kFORGET, true, fbw);
-          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kFORGET, false, fwr);
-    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kFORGET, false, fbr);
+        lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kFORGET, true, fww);
+        lstm->setBiasForGate(0, nvinfer1::RNNGateType::kFORGET, true, fbw);
+        lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kFORGET, false, fwr);
+        lstm->setBiasForGate(0, nvinfer1::RNNGateType::kFORGET, false, fbr);
 
+        lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kOUTPUT, true, oww);
+        lstm->setBiasForGate(0, nvinfer1::RNNGateType::kOUTPUT, true, obw);
+        lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kOUTPUT, false, owr);
+        lstm->setBiasForGate(0, nvinfer1::RNNGateType::kOUTPUT, false, obr);
 
-          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kOUTPUT, true, oww);
-    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kOUTPUT, true, obw);
-          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kOUTPUT, false, owr);
-    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kOUTPUT, false, obr);
+        lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kCELL, true, cww);
+        lstm->setBiasForGate(0, nvinfer1::RNNGateType::kCELL, true, cbw);
+        lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kCELL, false, cwr);
+        lstm->setBiasForGate(0, nvinfer1::RNNGateType::kCELL, false, cbr);
+      }
 
-          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kCELL, true, cww);
-    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kCELL, true, cbw);
-          // lstm->setWeightsForGate(0, nvinfer1::RNNGateType::kCELL, false, cwr);
-    lstm->setBiasForGate(0, nvinfer1::RNNGateType::kCELL, false, cbr);
 
 
     return lstm;
