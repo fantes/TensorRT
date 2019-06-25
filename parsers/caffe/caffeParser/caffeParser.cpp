@@ -379,7 +379,6 @@ const IBlobNameToTensor* CaffeParser::parse(const char* deployFile,
 {
   CHECK_NULL_RET_NULL(deployFile)
 
-    std::cout << "inside custom parser" << std::endl;
     // this is used to deal with dropout layers which have different input and output
     mModel = std::unique_ptr<trtcaffe::NetParameter>(new trtcaffe::NetParameter);
     if (modelFile && !readBinaryProto(mModel.get(), modelFile, mProtobufBufferSize))
