@@ -79,9 +79,7 @@ void DetectionOutput::terminate() {}
 // Returns output dimensions at given index
 Dims DetectionOutput::getOutputDimensions(int index, const Dims* inputs, int nbInputDims)
 {
-  std::cout  << "nbInputDims:" << nbInputDims << std::endl;
-  std::cout  << "index:" << index << std::endl;
-    ASSERT(nbInputDims == 3);
+  ASSERT(nbInputDims == 3 || nbInputDims == 5);
     ASSERT(index == 0 || index == 1);
     // Output dimensions
     // index 0 : Dimensions 1x param.keepTopK x 7
