@@ -88,6 +88,7 @@ private:
     DetectionOutputParameters param;
     int C1, C2, numPriors;
     const char* mPluginNamespace;
+	bool _ARM = false;
 };
 
 class NMSPluginCreator : public BaseCreator

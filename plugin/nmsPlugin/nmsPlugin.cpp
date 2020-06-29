@@ -106,6 +106,14 @@ int DetectionOutput::enqueue(
     const void* const locData = inputs[param.inputOrder[0]];
     const void* const confData = inputs[param.inputOrder[1]];
     const void* const priorData = inputs[param.inputOrder[2]];
+	const void* arm_conf_data = NULL;
+	const void* arm_loc_data = NULL;
+
+	if (_ARM)
+	  {
+		arm_conf_data = inputs[param.inputOrder[3]];
+		arm_loc_data = inputs[param.inputOrder[4]];
+	  }
 
     // Output from plugin index 0: topDetections index 1: keepCount
     void* topDetections = outputs[0];
@@ -113,8 +121,10 @@ int DetectionOutput::enqueue(
 
     pluginStatus_t status = detectionInference(stream, batchSize, C1, C2, param.shareLocation,
         param.varianceEncodedInTarget, param.backgroundLabelId, numPriors, param.numClasses, param.topK, param.keepTopK,
-        param.confidenceThreshold, param.nmsThreshold, param.codeType, DataType::kFLOAT, locData, priorData,
-        DataType::kFLOAT, confData, keepCount, topDetections, workspace, param.isNormalized, param.confSigmoid);
+		 param.confidenceThreshold, param.nmsThreshold, param.objectnessScore, param.codeType, DataType::kFLOAT, locData, priorData,
+		DataType::kFLOAT, confData,
+		arm_conf_data, arm_loc_data,
+		keepCount, topDetections, workspace, param.isNormalized, param.confSigmoid);
     ASSERT(status == STATUS_SUCCESS);
     return 0;
 }
@@ -216,7 +226,10 @@ void DetectionOutput::configurePlugin(const Dims* inputDims, int nbInputs, const
     const bool* outputIsBroadcast, PluginFormat floatFormat, int maxBatchSize)
 {
     // Number of input dimension should be 3
-    ASSERT(nbInputs == 3);
+    ASSERT(nbInputs == 3 || nbInputs == 5);
+
+	if (nbInputs == 5)
+	  _ARM = true;
 
     // Number of output dimension wil be 2
     ASSERT(nbOutputs == 2);
@@ -270,6 +283,7 @@ NMSPluginCreator::NMSPluginCreator()
     mPluginAttributes.emplace_back(PluginField("keepTopK", nullptr, PluginFieldType::kINT32, 1));
     mPluginAttributes.emplace_back(PluginField("confidenceThreshold", nullptr, PluginFieldType::kFLOAT32, 1));
     mPluginAttributes.emplace_back(PluginField("nmsThreshold", nullptr, PluginFieldType::kFLOAT32, 1));
+    mPluginAttributes.emplace_back(PluginField("objectnessScore", nullptr, PluginFieldType::kFLOAT32, 1));
     mPluginAttributes.emplace_back(PluginField("inputOrder", nullptr, PluginFieldType::kINT32, 3));
     mPluginAttributes.emplace_back(PluginField("confSigmoid", nullptr, PluginFieldType::kINT32, 1));
     mPluginAttributes.emplace_back(PluginField("isNormalized", nullptr, PluginFieldType::kINT32, 1));
@@ -351,6 +365,12 @@ IPluginV2Ext* NMSPluginCreator::createPlugin(const char* name, const PluginField
             ASSERT(fields[i].type == PluginFieldType::kFLOAT32);
             params.nmsThreshold = static_cast<float>(*(static_cast<const float*>(fields[i].data)));
         }
+		else if (!strcmp(attrName, "objectnessScore"))
+		  {
+			ASSERT(fields[i].type == PluginFieldType::kFLOAT32);
+			params.objectnessScore = static_cast<float>(*(static_cast<const float*>(fields[i].data)));
+		  }
+
         else if (!strcmp(attrName, "confSigmoid"))
         {
             params.confSigmoid = static_cast<int>(*(static_cast<const int*>(fields[i].data)));
@@ -372,7 +392,7 @@ IPluginV2Ext* NMSPluginCreator::createPlugin(const char* name, const PluginField
         }
         else if (!strcmp(attrName, "codeType"))
         {
-            ASSERT(fields[i].type == PluginFieldType::kINT32);
+		  ASSERT(fields[i].type == PluginFieldType::kINT32);
             params.codeType = static_cast<CodeTypeSSD>(*(static_cast<const int*>(fields[i].data)));
         }
     }

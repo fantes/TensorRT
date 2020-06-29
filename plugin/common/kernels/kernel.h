@@ -38,8 +38,10 @@ pluginStatus_t allClassNMS(cudaStream_t stream, int num, int num_classes, int nu
 
 pluginStatus_t detectionInference(cudaStream_t stream, int N, int C1, int C2, bool shareLocation,
     bool varianceEncodedInTarget, int backgroundLabelId, int numPredsPerClass, int numClasses, int topK, int keepTopK,
-    float confidenceThreshold, float nmsThreshold, CodeTypeSSD codeType, DataType DT_BBOX, const void* locData,
-    const void* priorData, DataType DT_SCORE, const void* confData, void* keepCount, void* topDetections,
+	  float confidenceThreshold, float nmsThreshold, float objectnessScore, CodeTypeSSD codeType, DataType DT_BBOX, const void* locData,
+    const void* priorData, DataType DT_SCORE, const void* confData,
+	const void* arm_conf_data, const void* arm_loc_data,
+	void* keepCount, void* topDetections,
     void* workspace, bool isNormalized = true, bool confSigmoid = false
 
 );
@@ -71,13 +73,17 @@ const char* cublasGetErrorString(cublasStatus_t error);
 pluginStatus_t permuteData(cudaStream_t stream, int nthreads, int num_classes, int num_data, int num_dim,
     DataType DT_DATA, bool confSigmoid, const void* data, void* new_data);
 
+pluginStatus_t OSPermuteData(cudaStream_t stream, int nthreads, int num_classes, int num_data, int num_dim,
+							 DataType DT_DATA, bool confSigmoid, const void* data, const void* arm_data, float objectness_score, void* new_data);
+
+
 size_t detectionForwardPreNMSSize(int N, int C2);
 
 size_t detectionForwardPostNMSSize(int N, int numClasses, int topK);
 
 pluginStatus_t decodeBBoxes(cudaStream_t stream, int nthreads, CodeTypeSSD code_type, bool variance_encoded_in_target,
     int num_priors, bool share_location, int num_loc_classes, int background_label_id, bool clip_bbox, DataType DT_BBOX,
-    const void* loc_data, const void* prior_data, void* bbox_data);
+							const void* loc_data, const void* prior_data, const void* arm_loc_data, void* bbox_data);
 
 size_t normalizePluginWorkspaceSize(bool acrossSpatial, int C, int H, int W);
 

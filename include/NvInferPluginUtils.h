@@ -181,7 +181,7 @@ struct DetectionOutputParameters
 {
     bool shareLocation, varianceEncodedInTarget;
     int backgroundLabelId, numClasses, topK, keepTopK;
-    float confidenceThreshold, nmsThreshold;
+  float confidenceThreshold, nmsThreshold, objectnessScore;
     CodeTypeSSD codeType;
     int inputOrder[3];
     bool confSigmoid;

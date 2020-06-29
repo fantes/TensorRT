@@ -980,6 +980,8 @@ message DetectionOutputParameter {
   // Only consider detections whose confidences are larger than a threshold.
   // If not provided, consider all boxes.
   optional float confidence_threshold = 9;
+  // the objectness score is used for the anchor refinement module to filter easy negative anchor.
+  optional float objectness_score = 13 [default = 0.01];
   // If true, visualize the detection results.
   optional bool visualize = 10 [default = false];
   // The threshold used to visualize the detection results.

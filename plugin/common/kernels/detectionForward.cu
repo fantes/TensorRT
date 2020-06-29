@@ -30,12 +30,15 @@ pluginStatus_t detectionInference(
     const int keepTopK,
     const float confidenceThreshold,
     const float nmsThreshold,
+	const float objectnessScore,
     const CodeTypeSSD codeType,
     const DataType DT_BBOX,
     const void* locData,
     const void* priorData,
     const DataType DT_SCORE,
     const void* confData,
+	const void* arm_confData,
+	const void* arm_locData,
     void* keepCount,
     void* topDetections,
     void* workspace,
@@ -57,19 +60,23 @@ pluginStatus_t detectionInference(
     size_t bboxDataSize = detectionForwardBBoxDataSize(N, C1, DataType::kFLOAT);
     void* bboxDataRaw = workspace;
 
-    pluginStatus_t status = decodeBBoxes(stream,
-                                      locCount,
-                                      codeType,
-                                      varianceEncodedInTarget,
-                                      numPredsPerClass,
-                                      shareLocation,
-                                      numLocClasses,
-                                      backgroundLabelId,
-                                      clipBBox,
-                                      DataType::kFLOAT,
-                                      locData,
-                                      priorData,
-                                      bboxDataRaw);
+    pluginStatus_t status;
+
+	status = decodeBBoxes(stream,
+						  locCount,
+						  codeType,
+						  varianceEncodedInTarget,
+						  numPredsPerClass,
+						  shareLocation,
+						  numLocClasses,
+						  backgroundLabelId,
+						  clipBBox,
+						  DataType::kFLOAT,
+						  locData,
+						  priorData,
+						  arm_locData,
+						  bboxDataRaw);
+
 
     ASSERT_FAILURE(status == STATUS_SUCCESS);
 
@@ -121,15 +128,31 @@ pluginStatus_t detectionInference(
      * After permutation, bboxData format:
      * [batch_size, numClasses, numPredsPerClass, 1]
      */
-    status = permuteData(stream,
-                         numScores,
-                         numClasses,
-                         numPredsPerClass,
-                         1,
-                         DataType::kFLOAT,
-                         confSigmoid,
-                         confData,
-                         scores);
+
+	if (arm_confData == NULL)
+	  status = permuteData(stream,
+						   numScores,
+						   numClasses,
+						   numPredsPerClass,
+						   1,
+						   DataType::kFLOAT,
+						   confSigmoid,
+						   confData,
+						   scores);
+	else
+	  status = OSPermuteData(stream,
+						   numScores,
+						   numClasses,
+						   numPredsPerClass,
+						   1,
+						   DataType::kFLOAT,
+						   confSigmoid,
+						   confData,
+						   arm_confData,
+						   objectnessScore,
+						   scores);
+
+
     ASSERT_FAILURE(status == STATUS_SUCCESS);
 
     size_t indicesSize = detectionForwardPreNMSSize(N, C2);

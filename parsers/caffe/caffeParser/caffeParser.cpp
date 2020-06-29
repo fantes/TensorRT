@@ -195,6 +195,11 @@ std::vector<nvinfer1::PluginField> CaffeParser::parseDetectionOutputParam(const 
     *nmsThreshold = nmsp.nms_threshold();
     f.emplace_back("nmsThreshold", nmsThreshold, PluginFieldType::kFLOAT32, 1);
 
+	//objecteness score for ARM
+	auto* objectnessScore = allocMemory<float>();
+	*objectnessScore = p.objectness_score();
+	f.emplace_back("objectnessScore", objectnessScore, PluginFieldType::kFLOAT32, 1);
+
     // input order = {0, 1, 2} in Caffe
     int* inputOrder = allocMemory<int32_t>(3);
     inputOrder[0] = 0;
